@@ -1,0 +1,12 @@
+{
+  "name": "merge-autodoc",
+  "version": "1.0.0",
+  "main": "index.js",
+  "dependencies": {
+    "@google-cloud/functions-framework": "^3.0.0",
+    "@automerge/automerge": "^2.2.8"
+  },
+  "scripts": {
+    "start": "functions-framework --target=mergeAutoDoc"
+  }
+}
