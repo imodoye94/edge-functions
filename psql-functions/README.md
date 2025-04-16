@@ -1,0 +1,1 @@
+The get_rows_childtable_{box_id}(_site_id UUID, _table_name TEXT) is exactly the same as the mothertable function. The box_id is supplied once the box is provisioned and the function is created on start up of the local db on the box and remains there to be called from the cloud mother VM when sync is triggered.
