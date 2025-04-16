@@ -22,11 +22,12 @@ functions.http('explodeAutoDoc', async (req, res) => {
     // Convert to plain JSON
     const jsonData = Automerge.toJS(doc);
 
-    // Return both exploded JSON and the original base64 doc
-    res.status(200).json({
-      json_data: jsonData,
-      doc: req.body.doc // so it can be reused directly in DB
-    });
+	// Return a single flat object that includes every exploded field 
+	// plus the original base64 doc string under the key "doc"
+	res.status(200).json({
+	  ...jsonData,
+	  doc: req.body.doc
+	});
   } catch (err) {
     console.error('Error exploding doc:', err);
     res.status(500).send('Internal Server Error');
