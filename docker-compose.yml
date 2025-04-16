@@ -1,0 +1,16 @@
+services:
+  generate-autodoc:
+    build:
+      context: ./edge-functions/generate-autodoc
+      dockerfile: Dockerfile
+    container_name: generate-autodoc
+  merge-autodoc:
+    build:
+      context: ./edge-functions/merge-autodoc
+      dockerfile: Dockerfile
+    container_name: merge-autodoc
+  explode-autodoc:
+    build:
+      context: ./edge-functions/explode-autodoc
+      dockerfile: Dockerfile
+    container_name: explode-autodoc
