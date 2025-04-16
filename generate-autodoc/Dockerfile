@@ -8,7 +8,7 @@ WORKDIR /usr/src/app
 COPY package*.json ./
 RUN npm install --production
 
-# Copy the rest of your app
+# Copy the rest of app
 COPY . .
 
 # Expose port (used internally by the Functions Framework)
