@@ -1,0 +1,165 @@
+CREATE OR REPLACE FUNCTION start_sync_mothertable(
+  _site_id    UUID,
+  _table_name TEXT,
+  _box_id     UUID
+)
+RETURNS VOID
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+DECLARE
+  local_rows    JSONB;
+  foreign_rows  JSONB;
+  merged_rows   JSONB := '[]'::jsonb;
+  rec           JSONB;
+  _id           UUID;
+  _doc          TEXT;
+  exploded      JSONB;
+  col_list      TEXT;
+  insert_cols   TEXT;
+  select_cols   TEXT;
+  update_cols   TEXT;
+  fmt_sql       TEXT;
+BEGIN
+  -----------------------------------------------------------------------
+  -- 1) Get local changes from mother
+  -----------------------------------------------------------------------
+  local_rows := get_rows_mothertable(_site_id, _table_name);
+  IF local_rows IS NULL THEN
+    local_rows := '[]'::jsonb;
+  END IF;
+
+  -----------------------------------------------------------------------
+  -- 2) Get child changes over HTTP (pg_net), using your Supabase key
+  -----------------------------------------------------------------------
+  foreign_rows := (
+    SELECT (net.http_post(
+      format('https://supabaseurl.mediverse.ai/rest/v1/rpc/get_rows_childtable_%s', _box_id::text),
+      jsonb_build_object(
+        'site_id', _site_id,
+        'table_name', _table_name
+      ),
+      jsonb_build_object('Authorization','Bearer SERVICE_APIKEY'),
+      '{}'::jsonb,    -- no query‑params
+      5000            -- 5s timeout
+    ))::jsonb
+  );
+  IF foreign_rows IS NULL THEN
+    foreign_rows := '[]'::jsonb;
+  END IF;
+
+  -----------------------------------------------------------------------
+  -- 3) Rows only in local
+  -----------------------------------------------------------------------
+  merged_rows := merged_rows ||
+    COALESCE((
+      SELECT jsonb_agg(elem)
+      FROM (
+        SELECT elem
+        FROM jsonb_array_elements(local_rows) AS elem
+        WHERE NOT EXISTS (
+          SELECT 1
+          FROM jsonb_array_elements(foreign_rows) AS f
+          WHERE f->>'id' = elem->>'id'
+        )
+      ) AS uniq
+    ), '[]'::jsonb);
+
+  -----------------------------------------------------------------------
+  -- 4) Rows only in foreign
+  -----------------------------------------------------------------------
+  merged_rows := merged_rows ||
+    COALESCE((
+      SELECT jsonb_agg(elem)
+      FROM (
+        SELECT elem
+        FROM jsonb_array_elements(foreign_rows) AS elem
+        WHERE NOT EXISTS (
+          SELECT 1
+          FROM jsonb_array_elements(local_rows) AS l
+          WHERE l->>'id' = elem->>'id'
+        )
+      ) AS uniq
+    ), '[]'::jsonb);
+
+  -----------------------------------------------------------------------
+  -- 5) CRDT‑merge rows present on both sides
+  -----------------------------------------------------------------------
+  FOR rec IN
+    SELECT
+      jsonb_build_object(
+        'id', l->>'id',
+        'doc', (
+          SELECT net.http_post(
+            'http://merge-autodoc:8080/mergeAutoDoc',
+            jsonb_build_object(
+              'doc1', l->>'doc',
+              'doc2', f->>'doc'
+            ),
+            '{}'::jsonb,'{}'::jsonb,5000
+          )
+        )
+      ) AS merged_rec
+    FROM jsonb_array_elements(local_rows)  AS l
+    JOIN jsonb_array_elements(foreign_rows) AS f
+      ON l->>'id' = f->>'id'
+  LOOP
+    merged_rows := merged_rows || rec->'merged_rec';
+  END LOOP;
+
+  -----------------------------------------------------------------------
+  -- 6) For each merged row: explode + upsert
+  -----------------------------------------------------------------------
+  FOR rec IN SELECT * FROM jsonb_array_elements(merged_rows)
+  LOOP
+    _id  := (rec->>'id')::UUID;
+    _doc := rec->>'doc';
+
+    -- call explode-autodoc
+    exploded := (
+      SELECT (net.http_post(
+        'http://explode-autodoc:8080/explodeAutoDoc',
+        jsonb_build_object('doc', _doc),
+        '{}'::jsonb,'{}'::jsonb,5000
+      ))::jsonb
+    );
+
+    -- build comma‑lists of exploded keys
+    SELECT string_agg(quote_ident(key), ',') INTO col_list
+      FROM jsonb_object_keys(exploded) AS t(key);
+
+    IF col_list IS NULL THEN
+      CONTINUE;  -- nothing to upsert besides id
+    END IF;
+
+    insert_cols := 'id,' || col_list;
+    SELECT
+      '$1::uuid,' ||
+      string_agg(format('p.%s', quote_ident(key)), ',')
+    INTO select_cols
+      FROM jsonb_object_keys(exploded) AS t(key);
+
+    SELECT
+      string_agg(format('%1$I = EXCLUDED.%1$I', key), ',')
+    INTO update_cols
+      FROM jsonb_object_keys(exploded) AS t(key);
+
+    -- assemble & execute dynamic UPSERT
+    fmt_sql := format($f$
+      INSERT INTO %I (%s)
+      SELECT %s
+      FROM jsonb_populate_record(NULL::%I, $2) AS p
+      ON CONFLICT (id)
+        DO UPDATE SET %s
+    $f$,
+      _table_name,
+      insert_cols,
+      select_cols,
+      _table_name,
+      update_cols
+    );
+
+    EXECUTE fmt_sql USING _id, exploded;
+  END LOOP;
+END;
+$$;
