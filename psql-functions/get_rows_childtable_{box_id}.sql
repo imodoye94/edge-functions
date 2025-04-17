@@ -1,3 +1,4 @@
+-- LIVES EXCLUSIVELY ON CHILD VM, in the public schema, and is called only by site record who has its box ID listed in their row
 CREATE OR REPLACE FUNCTION public.get_rows_childtable_{box_id}(
   _site_id   UUID,
   _table_name TEXT
