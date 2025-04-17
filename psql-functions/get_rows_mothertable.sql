@@ -1,3 +1,4 @@
+-- LIVES EXCLUSIVELY ON MOTHER VM, in the public schema and is called via RPC from all children
 CREATE OR REPLACE FUNCTION public.get_rows_mothertable(
   _site_id   UUID,
   _table_name TEXT
