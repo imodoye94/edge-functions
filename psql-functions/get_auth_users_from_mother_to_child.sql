@@ -40,7 +40,7 @@ RETURNS TABLE (
   is_anonymous               boolean
 )
 LANGUAGE sql
-SECURITY DEFINER
+SECURITY INVOKER
 AS $$
   SELECT
     a.instance_id,
