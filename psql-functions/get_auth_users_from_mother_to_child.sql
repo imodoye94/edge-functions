@@ -84,8 +84,8 @@ AS $$
     ON u.id = a.id
   WHERE u.site_id = _site_id
     AND (
-      a.created_at > (SELECT _last_synced_at FROM public.sites WHERE id = _site_id)
+      a.created_at > _last_synced_at
       OR
-      a.updated_at > (SELECT _last_synced_at FROM public.sites WHERE id = _site_id)
+      a.updated_at > _last_synced_at
     );
 $$;
