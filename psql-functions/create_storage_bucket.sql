@@ -1,3 +1,4 @@
+--EXCLUSIVELY ON MOTHER VM ONLY called once per new site
 CREATE OR REPLACE FUNCTION public.create_storage_bucket(
   _organization_id uuid,
   _site_id         uuid
