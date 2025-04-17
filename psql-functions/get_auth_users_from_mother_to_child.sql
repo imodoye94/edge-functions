@@ -1,4 +1,4 @@
--- ON MOTHER VM, in the public schema
+-- LIVES EXCLUSIVELY ON MOTHER VM, in the public schema
 CREATE OR REPLACE FUNCTION public.get_auth_users_from_mother_to_child(
   _site_id uuid
 )
