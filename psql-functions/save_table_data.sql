@@ -1,68 +1,62 @@
--- 1) Create the trigger function
 CREATE OR REPLACE FUNCTION save_table_data()
-RETURNS TRIGGER
+RETURNS trigger
 LANGUAGE plpgsql
 SECURITY DEFINER
 AS $$
 DECLARE
-  payload   JSONB;
-  resp      JSONB;
-  gen_doc   TEXT;
-  merged_doc TEXT;
+  payload      jsonb;
+  gen_doc      text;
+  merged_doc   text;
+  exploded     jsonb;
+  http_res     jsonb;
+  k            text;
+  v            jsonb;
 BEGIN
-  -- Only act on INSERT or UPDATE
-  IF TG_OP NOT IN ('INSERT','UPDATE') THEN
-    RETURN NEW;
-  END IF;
+  -- Build the “current row” JSON minus id and doc
+  payload := to_jsonb(NEW) - 'id' - 'doc';
 
-  -- Build payload to first call generate-autodoc
-  -- strip out id and doc fields from NEW
-  payload := jsonb_build_object(
-    'json_data', to_jsonb(NEW) - 'id' - 'doc',
-    'old_doc',   COALESCE(OLD.doc, NULL)
-  );
+  -- 1) Generate a fresh doc from the row’s current values
+  SELECT (content::jsonb->>'doc')::text
+    INTO gen_doc
+    FROM http_post(
+           'http://generate-autodoc:8080/generateAutoDoc',
+           payload,
+           '{}'::jsonb
+         ) AS resp(headers jsonb, status_code int, content text);
 
-  -- Call generate-autodoc
-  resp := (
-    SELECT (content::jsonb)
-      FROM http_post(
-        'http://generate-autodoc:8080/generateAutoDoc',
-        payload,
-        NULL::JSONB,     -- no extra headers
-        NULL::JSONB      -- no extra params
-      )
-  );
-  gen_doc := resp ->> 'doc';
-
+  -- 2) If NEW.doc was non‑null, merge it in
   IF NEW.doc IS NOT NULL THEN
-    -- merge generated doc with existing NEW.doc
-    payload := jsonb_build_object(
-      'doc1', gen_doc,
-      'doc2', NEW.doc
-    );
-
-    resp := (
-      SELECT (content::jsonb)
-        FROM http_post(
-          'http://merge-autodoc:8080/mergeAutoDoc',
-          payload,
-          NULL::JSONB,
-          NULL::JSONB
-        )
-    );
-    merged_doc := resp ->> 'doc';
-    NEW.doc := merged_doc;
+    SELECT (content::jsonb->>'doc')::text
+      INTO merged_doc
+      FROM http_post(
+             'http://merge-autodoc:8080/mergeAutoDoc',
+             jsonb_build_object('doc1', gen_doc, 'doc2', NEW.doc),
+             '{}'::jsonb
+           ) AS resp(headers jsonb, status_code int, content text);
   ELSE
-    -- no previous NEW.doc, so just use the generated one
-    NEW.doc := gen_doc;
+    merged_doc := gen_doc;
   END IF;
+
+  -- 3) Explode that merged_doc into column‑name → value pairs
+  SELECT (content::jsonb->'json_data')
+    INTO exploded
+    FROM http_post(
+           'http://explode-autodoc:8080/explodeAutoDoc',
+           jsonb_build_object('doc', merged_doc),
+           '{}'::jsonb
+         ) AS resp(headers jsonb, status_code int, content text);
+
+  -- 4) Overwrite each field in NEW from the exploded JSON
+  FOR k, v IN SELECT * FROM jsonb_each(exploded) LOOP
+    -- skip id and doc
+    IF k NOT IN ('id','doc') THEN
+      EXECUTE format('NEW.%I := $1', k) USING v;
+    END IF;
+  END LOOP;
+
+  -- 5) Finally set the merged doc
+  NEW.doc := merged_doc;
 
   RETURN NEW;
 END;
 $$;
-
--- 2) Attach it to a table (example for "my_table"):
-CREATE TRIGGER trg_save_my_table_data
-BEFORE INSERT OR UPDATE ON public.my_table
-FOR EACH ROW
-EXECUTE FUNCTION save_table_data();
