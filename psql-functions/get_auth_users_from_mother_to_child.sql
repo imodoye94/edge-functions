@@ -1,7 +1,7 @@
 -- LIVES EXCLUSIVELY ON MOTHER VM, in the public schema and is calld from child
 CREATE OR REPLACE FUNCTION public.get_auth_users_from_mother_to_child(
   _site_id uuid
-  _last_synced_at timestamptz
+  _since timestamptz
 )
 RETURNS TABLE (
   instance_id                uuid,
@@ -84,8 +84,8 @@ AS $$
     ON u.id = a.id
   WHERE u.site_id = _site_id
     AND (
-      a.created_at > _last_synced_at
+      a.created_at > _since
       OR
-      a.updated_at > _last_synced_at
+      a.updated_at > _since
     );
 $$;
