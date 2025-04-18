@@ -4,65 +4,57 @@ CREATE OR REPLACE FUNCTION public.rebuild_jsonb(flat jsonb)
  IMMUTABLE
 AS $function$
 DECLARE
-  entry        RECORD;
-  result       JSONB := '{}'::jsonb;
-  obj_prefixes TEXT[];
-  arr_prefixes TEXT[];
-  prefix       TEXT;
-  path         TEXT[];
+    result     jsonb := '{}'::jsonb;      -- final document
+
+    leaf       RECORD;                    -- loop over key/value pairs
+    tokens     text[];                    -- path split into parts
+    i          integer;                   -- index in tokens
+    subpath    text[];
+    nexttok    text;
+    container  jsonb;
 BEGIN
-  -- 1) Collect all object‐prefixes (e.g. "user", "user.prefs" from "user.prefs.theme")
-  SELECT array_agg(DISTINCT regexp_replace(k, '\.[^\.]+$', ''))
-    INTO obj_prefixes
-  FROM jsonb_object_keys(flat) AS t(k)
-  WHERE k LIKE '%.%';
+    --------------------------------------------------------------------------
+    -- 1) For every flattened path ⇒ value pair
+    --------------------------------------------------------------------------
+    FOR leaf IN
+        SELECT key, value FROM jsonb_each(flat)
+    LOOP
+        -- a) split "a.b[0].c" → ['a','b','0','c']
+        tokens := regexp_split_to_array(
+                    regexp_replace(leaf.key, '\[(\d+)\]', '.\1', 'g'),
+                    '\.'
+                  );
 
-  IF obj_prefixes IS NOT NULL THEN
-    FOREACH prefix IN ARRAY obj_prefixes LOOP
-      result := jsonb_set(
-        result,
-        regexp_split_to_array(prefix, '\.'),
-        '{}'::jsonb,
-        true
-      );
+        -- b) ensure parent containers exist
+        IF array_length(tokens,1) > 1 THEN
+            FOR i IN 1 .. array_length(tokens,1)-1 LOOP
+                subpath := tokens[1:i];
+
+                -- skip if already there
+                IF result #> subpath IS NOT NULL THEN
+                    CONTINUE;
+                END IF;
+
+                -- pick object {} vs array [] based on next token
+                nexttok := tokens[i+1];
+                container := CASE WHEN nexttok ~ '^\d+$' THEN '[]'::jsonb ELSE '{}'::jsonb END;
+
+                result := jsonb_set(result, subpath, container, true);
+            END LOOP;
+        END IF;
+
+        -- c) set the leaf value
+        result := jsonb_set(result, tokens, leaf.value, true);
     END LOOP;
-  END IF;
 
-  -- 2) Collect all array‐prefixes (e.g. "tags" from "tags[0]")
-  SELECT array_agg(DISTINCT regexp_replace(k, '\[\d+\].*$', ''))
-    INTO arr_prefixes
-  FROM jsonb_object_keys(flat) AS t(k)
-  WHERE k LIKE '%[%]%';
+    --------------------------------------------------------------------------
+    -- 2) Post‑process: if top‑level has only a "" key, unwrap it
+    --------------------------------------------------------------------------
+    IF result ? '' AND
+       (SELECT count(*) = 1 FROM jsonb_object_keys(result)) THEN
+      RETURN result -> '';
+    END IF;
 
-  IF arr_prefixes IS NOT NULL THEN
-    FOREACH prefix IN ARRAY arr_prefixes LOOP
-      result := jsonb_set(
-        result,
-        regexp_split_to_array(prefix, '\.'),
-        '[]'::jsonb,
-        true
-      );
-    END LOOP;
-  END IF;
-
-  -- 3) Finally, put each flat value into place
-  FOR entry IN
-    SELECT key, value
-      FROM jsonb_each(flat)
-  LOOP
-    -- turn "a.b[2].c" → ['a','b','2','c']
-    path := regexp_split_to_array(
-      regexp_replace(entry.key, '\[(\d+)\]', '.\1', 'g'),
-      '\.'
-    );
-    result := jsonb_set(
-      result,
-      path,
-      entry.value,
-      true
-    );
-  END LOOP;
-
-  RETURN result;
+    RETURN result;
 END;
 $function$
