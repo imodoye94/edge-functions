@@ -2,7 +2,7 @@ CREATE OR REPLACE FUNCTION save_table_data()
 RETURNS trigger
 LANGUAGE plv8
 AS $$
-  -- 1) Lazy‑load Automerge once per Postgres worker
+  /* 1) Lazy‑load Automerge once per Postgres worker */
   if (!globalThis.Automerge) {
     globalThis.Automerge = require(
       'http://local-fileserver:9033/data/mediverse/scripts/automerge.min.js',
@@ -11,7 +11,7 @@ AS $$
   }
   const Automerge = globalThis.Automerge;
 
-  -- 2) Cache the list of JSONB columns for this table
+  /* 2) Cache the list of JSONB columns for this table */
   if (!globalThis._jsonbCols || globalThis._lastTable !== TG_TABLE_NAME) {
     globalThis._lastTable = TG_TABLE_NAME;
     const cols = sql(`
@@ -25,10 +25,10 @@ AS $$
   }
   const jsonbCols = globalThis._jsonbCols;
 
-  -- 3) Build the merge payload
+  /* 3) Build the merge payload */
   const payload = {};
 
-  -- 3a) Flatten each JSONB column into { leafPath: value }
+  /* 3a) Flatten each JSONB column into { leafPath: value } */
   for (const col of jsonbCols) {
     const val = NEW[col];
     if (val !== null && val !== undefined) {
@@ -46,7 +46,7 @@ AS $$
     }
   }
 
-  -- 3b) Include all other non‑CRDT, non‑JSONB columns
+  /* 3b) Include all other non‑CRDT, non‑JSONB columns */
   for (const col in NEW) {
     if (
       col === 'id' ||
@@ -58,18 +58,18 @@ AS $$
     payload[col] = NEW[col];
   }
 
-  -- 4) Rehydrate or init the Automerge doc
+  /* 4) Rehydrate or init the Automerge doc */
   let doc = (TG_OP === 'UPDATE' && OLD.doc)
     ? Automerge.load(OLD.doc)
     : Automerge.init();
 
-  -- 5) Apply one atomic change with our full payload
+  /* 5) Apply one atomic change with our full payload */
   doc = Automerge.change(doc, d => Object.assign(d, payload));
 
-  -- 6) Explode back into plain JS object
+  /* 6) Explode back into plain JS object */
   const exploded = Automerge.toJS(doc);
 
-  -- 7) Rebuild each JSONB column from exploded leaves
+  /* 7) Rebuild each JSONB column from exploded leaves */
   for (const col of jsonbCols) {
     const slice = {};
     const p1 = `${col}.`;
@@ -91,7 +91,7 @@ AS $$
     }
   }
 
-  -- 8) Write back all primitive columns
+  /* 8) Write back all primitive columns */
   for (const col in NEW) {
     if (
       col === 'id' ||
@@ -105,7 +105,7 @@ AS $$
     }
   }
 
-  -- 9) Persist merged CRDT
+  /* 9) Persist merged CRDT */
   NEW.doc = Automerge.save(doc);
 
   return NEW;
