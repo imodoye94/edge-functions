@@ -1,62 +1,43 @@
 CREATE OR REPLACE FUNCTION save_table_data()
 RETURNS trigger
-LANGUAGE plpgsql
-SECURITY DEFINER
+LANGUAGE plv8
 AS $$
-DECLARE
-  payload      jsonb;
-  gen_doc      text;
-  merged_doc   text;
-  exploded     jsonb;
-  http_res     jsonb;
-  k            text;
-  v            jsonb;
-BEGIN
-  -- Build the “current row” JSON minus id and doc
-  payload := to_jsonb(NEW) - 'id' - 'doc';
+  // Cache Automerge once per backend process
+  if (!globalThis.Automerge) {
+    globalThis.Automerge = require(
+      'http://local-fileserver:9033/data/mediverse/scripts/automerge.min.js',
+      false
+    );
+  }
+  const Automerge = globalThis.Automerge;
 
-  -- 1) Generate a fresh doc from the row’s current values
-  SELECT (content::jsonb->>'doc')::text
-    INTO gen_doc
-    FROM http_post(
-           'http://generate-autodoc:8080/generateAutoDoc',
-           payload,
-           '{}'::jsonb
-         ) AS resp(headers jsonb, status_code int, content text);
+  // Build plain payload from NEW
+  const payload = {};
+  for (let col in NEW) {
+    if (!['id', 'doc', 'created_at', 'modified_at'].includes(col)) {
+      payload[col] = NEW[col];
+    }
+  }
 
-  -- 2) If NEW.doc was non‑null, merge it in
-  IF NEW.doc IS NOT NULL THEN
-    SELECT (content::jsonb->>'doc')::text
-      INTO merged_doc
-      FROM http_post(
-             'http://merge-autodoc:8080/mergeAutoDoc',
-             jsonb_build_object('doc1', gen_doc, 'doc2', NEW.doc),
-             '{}'::jsonb
-           ) AS resp(headers jsonb, status_code int, content text);
-  ELSE
-    merged_doc := gen_doc;
-  END IF;
+  // Rehydrate previous CRDT (ONLY for UPDATE)
+  let doc = (TG_OP === 'UPDATE' && OLD.doc)
+    ? Automerge.load(OLD.doc)
+    : Automerge.init();
 
-  -- 3) Explode that merged_doc into column‑name → value pairs
-  SELECT (content::jsonb->'json_data')
-    INTO exploded
-    FROM http_post(
-           'http://explode-autodoc:8080/explodeAutoDoc',
-           jsonb_build_object('doc', merged_doc),
-           '{}'::jsonb
-         ) AS resp(headers jsonb, status_code int, content text);
+  // Apply the incoming changes in one CRDT transaction
+  doc = Automerge.change(doc, d => Object.assign(d, payload));
 
-  -- 4) Overwrite each field in NEW from the exploded JSON
-  FOR k, v IN SELECT * FROM jsonb_each(exploded) LOOP
-    -- skip id and doc
-    IF k NOT IN ('id','doc') THEN
-      EXECUTE format('NEW.%I := $1', k) USING v;
-    END IF;
-  END LOOP;
+  // Push values back into NEW
+  const exploded = Automerge.toJS(doc);
+  for (let col in NEW) {
+    if (!['id', 'doc', 'created_at', 'modified_at'].includes(col)
+        && exploded[col] !== undefined) {
+      NEW[col] = exploded[col];
+    }
+  }
 
-  -- 5) Finally set the merged doc
-  NEW.doc := merged_doc;
+  // Persist the CRDT
+  NEW.doc = Automerge.save(doc);
 
-  RETURN NEW;
-END;
+  return NEW;
 $$;
