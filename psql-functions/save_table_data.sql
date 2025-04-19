@@ -8,6 +8,7 @@ SECURITY DEFINER
 AS $func$
 DECLARE
     _payload      jsonb;
+    _col_name     text;
     _endpoint     text;
     _body         text;
     _resp         jsonb;
@@ -35,13 +36,13 @@ BEGIN
         _payload := _newload -  _oldload;
 
         /* mark rich‑text paths with a prefix "RT:" */
-        FOR key IN SELECT column_name
+        FOR _col_name IN SELECT column_name
                    FROM public.rich_text_columns
                    WHERE table_name = TG_TABLE_NAME
         LOOP
-            IF _payload ? key THEN
-              _payload := jsonb_set(_payload, ARRAY[key],
-                                    to_jsonb('RT:' || _payload ->> key), false);
+            IF _payload ? _col_name THEN
+              _payload := jsonb_set(_payload, ARRAY[_col_name],
+                                    to_jsonb('RT:' || _payload ->> _col_name), false);
             END IF;
         END LOOP;
 
