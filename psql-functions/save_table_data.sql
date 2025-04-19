@@ -2,33 +2,24 @@ CREATE OR REPLACE FUNCTION save_table_data()
 RETURNS trigger
 LANGUAGE plv8
 AS $$
-  /* 1) Lazy‑load Automerge once per Postgres worker */
-  if (!globalThis.Automerge) {
-    globalThis.Automerge = require(
-      'http://local-fileserver:9033/data/mediverse/scripts/automerge.min.js',
-      false
-    );
-  }
-  const Automerge = globalThis.Automerge;
-
-  /* 2) Cache the list of JSONB columns for this table */
+  /* 1) Discover and cache JSONB columns for this table */
   if (!globalThis._jsonbCols || globalThis._lastTable !== TG_TABLE_NAME) {
-    globalThis._lastTable = TG_TABLE_NAME;
-    const cols = sql(`
+    globalThis._lastTable   = TG_TABLE_NAME;
+    const cols               = sql(`
       SELECT column_name
         FROM information_schema.columns
        WHERE table_schema = current_schema()
          AND table_name   = $1
          AND data_type    = 'jsonb'
     `, [TG_TABLE_NAME]);
-    globalThis._jsonbCols = cols.map(r => r.column_name);
+    globalThis._jsonbCols    = cols.map(r => r.column_name);
   }
   const jsonbCols = globalThis._jsonbCols;
 
-  /* 3) Build the merge payload */
+  /* 2) Build the flat payload of leaf‑paths → values */
   const payload = {};
 
-  /* 3a) Flatten each JSONB column into { leafPath: value } */
+  /* 2a) Flatten each JSONB column via flatten_jsonb() */
   for (const col of jsonbCols) {
     const val = NEW[col];
     if (val !== null && val !== undefined) {
@@ -37,7 +28,7 @@ AS $$
         [val]
       )[0].f;
       for (const leaf in flat) {
-        // e.g. leaf = "[0].x" or "a.b"
+        /* leaf is like "[0].x" or "a.b" */
         const key = leaf.startsWith('[')
           ? `${col}${leaf}`
           : `${col}.${leaf}`;
@@ -46,7 +37,7 @@ AS $$
     }
   }
 
-  /* 3b) Include all other non‑CRDT, non‑JSONB columns */
+  /* 2b) Include all other scalar columns (skip id/doc/timestamps/JSONB) */
   for (const col in NEW) {
     if (
       col === 'id' ||
@@ -58,22 +49,46 @@ AS $$
     payload[col] = NEW[col];
   }
 
-  /* 4) Rehydrate or init the Automerge doc */
-  let doc = (TG_OP === 'UPDATE' && OLD.doc)
-    ? Automerge.load(OLD.doc)
-    : Automerge.init();
+  /* 3) Call generateAutoDoc to get a new CRDT blob (base64) */
+  const genRes = sql(`
+    SELECT content->>'doc' AS doc
+      FROM http_post(
+             'http://functions-container:8080/generateAutoDoc',
+             $1::jsonb,
+             '{}'::jsonb
+           ) AS resp(headers jsonb, status_code int, content jsonb)
+  `, [payload]);
+  const newDoc = genRes[0].doc;
+  let mergedDoc = newDoc;
 
-  /* 5) Apply one atomic change with our full payload */
-  doc = Automerge.change(doc, d => Object.assign(d, payload));
+  /* 4) On UPDATE, merge with existing OLD.doc */
+  if (TG_OP === 'UPDATE' && OLD.doc) {
+    const mergeRes = sql(`
+      SELECT content->>'doc' AS doc
+        FROM http_post(
+               'http://functions-container:8080/mergeAutoDoc',
+               $1::jsonb,
+               '{}'::jsonb
+             ) AS resp(headers jsonb, status_code int, content jsonb)
+    `, [{ doc1: newDoc, doc2: OLD.doc }]);
+    mergedDoc = mergeRes[0].doc;
+  }
 
-  /* 6) Explode back into plain JS object */
-  const exploded = Automerge.toJS(doc);
+  /* 5) Explode the merged CRDT back into a plain key→value map */
+  const explRes = sql(`
+    SELECT content->'json_data' AS data
+      FROM http_post(
+             'http://functions-container:8080/explodeAutoDoc',
+             $1::jsonb,
+             '{}'::jsonb
+           ) AS resp(headers jsonb, status_code int, content jsonb)
+  `, [{ doc: mergedDoc }]);
+  const exploded = explRes[0].data;
 
-  /* 7) Rebuild each JSONB column from exploded leaves */
+  /* 6) Rebuild each JSONB column from its exploded leaves */
   for (const col of jsonbCols) {
     const slice = {};
-    const p1 = `${col}.`;
-    const p2 = `${col}[`;
+    const p1 = `${col}.`, p2 = `${col}[`;
     for (const k in exploded) {
       if (k.startsWith(p1) || k.startsWith(p2)) {
         const leafKey = k.startsWith(p1)
@@ -91,7 +106,7 @@ AS $$
     }
   }
 
-  /* 8) Write back all primitive columns */
+  /* 7) Write back all other primitive columns */
   for (const col in NEW) {
     if (
       col === 'id' ||
@@ -105,8 +120,8 @@ AS $$
     }
   }
 
-  /* 9) Persist merged CRDT */
-  NEW.doc = Automerge.save(doc);
+  /* 8) Persist the final merged CRDT blob */
+  NEW.doc = mergedDoc;
 
   return NEW;
 $$;
