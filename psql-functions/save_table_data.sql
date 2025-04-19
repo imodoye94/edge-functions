@@ -11,12 +11,14 @@ DECLARE
     _endpoint     text;
     _body         text;
     _resp         jsonb;
+    _newload jsonb := public.flatten_jsonb(to_jsonb(NEW) - ARRAY['doc','modified_at']);
+    _oldload jsonb := public.flatten_jsonb(to_jsonb(OLD) - ARRAY['doc','modified_at']);
 BEGIN
     /*****  INSERT  *****/
     IF TG_OP = 'INSERT' THEN
         -- If the client already sent a doc we trust it; otherwise create one.
         IF NEW.doc IS NULL OR NEW.doc = '' THEN
-            _payload  := to_jsonb(NEW) - ARRAY['doc','modified_at'];          -- strip metadata
+            _payload := public.flatten_jsonb(to_jsonb(NEW) - ARRAY['doc','modified_at']);          -- strip metadata
             _endpoint := 'http://functions:9033/generateAutoDoc';
             _body     := jsonb_build_object('payload', _payload)::text;
 
@@ -29,8 +31,7 @@ BEGIN
     /*****  UPDATE  *****/
     ELSIF TG_OP = 'UPDATE' THEN
         -- Build a JSON object of ONLY the fields that changed (excluding doc & modified_at)
-        _payload := (to_jsonb(NEW) - ARRAY['doc','modified_at'])
-                    #- (to_jsonb(OLD) - ARRAY['doc','modified_at']);
+        _payload := _newload -  _oldload;
 
         IF _payload <> '{}'::jsonb THEN
             _endpoint := 'http://functions:9033/mergeAutoDoc';
