@@ -18,9 +18,8 @@ DECLARE
 BEGIN
     /*****  INSERT  *****/
     IF TG_OP = 'INSERT' THEN
-        -- If the client already sent a doc we trust it; otherwise create one.
         IF NEW.doc IS NULL OR NEW.doc = '' THEN
-            _payload  := public.flatten_jsonb(to_jsonb(NEW) - ARRAY['doc','modified_at']);
+            _payload  := _newload;
             _endpoint := 'http://functions-container-lcwscooskc08c8g8sks84sc0:9033/generateAutoDoc';
             _body     := jsonb_build_object('payload', _payload)::text;
 
@@ -37,15 +36,22 @@ BEGIN
 
     /*****  UPDATE  *****/
     ELSIF TG_OP = 'UPDATE' THEN
-        -- Build a JSON object of ONLY the fields that changed (excluding doc & modified_at)
-        _payload := _newload - _oldload;
+        -- Build a JSON object of ONLY the fields that changed
+        SELECT jsonb_object_agg(key, val)
+          INTO _payload
+        FROM (
+          SELECT key, val
+          FROM jsonb_each(_newload) AS t(key,val)
+          WHERE ( _oldload -> key ) IS DISTINCT FROM val
+        ) sub;
 
         /* mark rich‑text paths with a prefix "RT:" */
-        FOR _col_name IN
-          SELECT column_name
-          FROM public.rich_text_columns
-          WHERE table_name = TG_TABLE_NAME
-        LOOP
+        IF _payload IS NOT NULL THEN
+          FOR _col_name IN
+            SELECT column_name
+            FROM public.rich_text_columns
+            WHERE table_name = TG_TABLE_NAME
+          LOOP
             IF _payload ? _col_name THEN
               _payload := jsonb_set(
                             _payload,
@@ -54,7 +60,10 @@ BEGIN
                             false
                           );
             END IF;
-        END LOOP;
+          END LOOP;
+        ELSE
+          _payload := '{}'::jsonb;
+        END IF;
 
         IF _payload <> '{}'::jsonb THEN
             _endpoint := 'http://functions-container-lcwscooskc08c8g8sks84sc0:9033/mergeAutoDoc';
