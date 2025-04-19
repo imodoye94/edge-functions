@@ -53,7 +53,7 @@ AS $$
   const genRes = sql(`
     SELECT content->>'doc' AS doc
       FROM http_post(
-             'http://functions-container:8080/generateAutoDoc',
+             'http://functions-container:9033/generateAutoDoc',
              $1::jsonb,
              '{}'::jsonb
            ) AS resp(headers jsonb, status_code int, content jsonb)
@@ -66,7 +66,7 @@ AS $$
     const mergeRes = sql(`
       SELECT content->>'doc' AS doc
         FROM http_post(
-               'http://functions-container:8080/mergeAutoDoc',
+               'http://functions-container:9033/mergeAutoDoc',
                $1::jsonb,
                '{}'::jsonb
              ) AS resp(headers jsonb, status_code int, content jsonb)
@@ -78,7 +78,7 @@ AS $$
   const explRes = sql(`
     SELECT content->'json_data' AS data
       FROM http_post(
-             'http://functions-container:8080/explodeAutoDoc',
+             'http://functions-container:9033/explodeAutoDoc',
              $1::jsonb,
              '{}'::jsonb
            ) AS resp(headers jsonb, status_code int, content jsonb)
