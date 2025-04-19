@@ -53,10 +53,11 @@ BEGIN
             WHERE table_name = TG_TABLE_NAME
           LOOP
             IF _payload ? _col_name THEN
-              _payload := jsonb_set(
+            /* build a 1‑element JSONB array and extract its 0th entry → safe JSON string */
+             _payload := jsonb_set(
                             _payload,
                             ARRAY[_col_name],
-                            to_jsonb('RT:' || _payload ->> _col_name),
+                            ( jsonb_build_array('RT:' || _payload ->> _col_name) -> 0 ),
                             false
                           );
             END IF;
