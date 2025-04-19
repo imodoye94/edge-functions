@@ -11,6 +11,7 @@ DECLARE
     _endpoint     text;
     _body         text;
     _resp         jsonb;
+    _rich_prefix text := TG_TABLE_NAME || '.';
     _newload jsonb := public.flatten_jsonb(to_jsonb(NEW) - ARRAY['doc','modified_at']);
     _oldload jsonb := public.flatten_jsonb(to_jsonb(OLD) - ARRAY['doc','modified_at']);
 BEGIN
@@ -32,6 +33,17 @@ BEGIN
     ELSIF TG_OP = 'UPDATE' THEN
         -- Build a JSON object of ONLY the fields that changed (excluding doc & modified_at)
         _payload := _newload -  _oldload;
+
+        /* mark rich‑text paths with a prefix "RT:" */
+        FOR key IN SELECT column_name
+                   FROM public.rich_text_columns
+                   WHERE table_name = TG_TABLE_NAME
+        LOOP
+            IF _payload ? key THEN
+              _payload := jsonb_set(_payload, ARRAY[key],
+                                    to_jsonb('RT:' || _payload ->> key), false);
+            END IF;
+        END LOOP;
 
         IF _payload <> '{}'::jsonb THEN
             _endpoint := 'http://functions:9033/mergeAutoDoc';
