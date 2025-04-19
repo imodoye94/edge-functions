@@ -45,7 +45,7 @@ BEGIN
           WHERE ( _oldload -> key ) IS DISTINCT FROM val
         ) sub;
 
-        /* mark rich‑text columns by renaming the key to "RT:col_name" */
+        /* mark rich‑text columns by key rename */
         IF _payload IS NOT NULL THEN
           FOR _col_name IN
             SELECT column_name
@@ -53,11 +53,10 @@ BEGIN
             WHERE table_name = TG_TABLE_NAME
           LOOP
             IF _payload ? _col_name THEN
-              _payload := (_payload - _col_name)
-                          || jsonb_build_object(
-                               'RT:'||_col_name,
-                               _payload -> _col_name
-                             );
+              _payload :=
+                jsonb_strip_nulls( (_payload - _col_name)
+                  || jsonb_build_object(
+                       'RT:'||_col_name, _payload -> _col_name ) );
             END IF;
           END LOOP;
         ELSE
