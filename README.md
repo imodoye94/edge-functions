@@ -12,6 +12,8 @@
 );
 
 -- Then you register the columns that need character-level merging like so (e.g. title and content columns of a `blog_posts` table)
+
+```sql
 INSERT INTO public.rich_text_columns VALUES
   ('blog_posts', 'title'),
   ('blog_posts', 'content');
