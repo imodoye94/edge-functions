@@ -11,7 +11,7 @@
   PRIMARY KEY (table_name, column_name)
 );
 
--- Then you register the columns that need character-level merging like so (e.g. title and content columns of a `blog_posts` table)
+- Then you register the columns that need character-level merging like so (e.g. title and content columns of a `blog_posts` table)
 
 ```sql
 INSERT INTO public.rich_text_columns VALUES
