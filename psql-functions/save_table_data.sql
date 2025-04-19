@@ -1,7 +1,7 @@
 /********************************************************************
  * CRDT write‑guard – calls Node/Automerge micro‑service
  *******************************************************************/
-CREATE OR REPLACE FUNCTION public.crdt_before_write()
+CREATE OR REPLACE FUNCTION public.save_table_data()
 RETURNS trigger
 LANGUAGE plpgsql
 SECURITY DEFINER
